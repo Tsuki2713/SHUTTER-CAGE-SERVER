@@ -3,22 +3,16 @@ const WebSocket = require("ws");
 
 const PORT = process.env.PORT || 3000;
 
-// ==============================
-// SHUTTER & CAGE
-// Multiplayer Server
-// ==============================
-
 const MAX_PLAYERS = 5;
-const HUMAN_MAX = 4;
 
-// ルーム一覧
+// ルーム
 const rooms = new Map();
 
-// ==============================
-// HTTPサーバー
-// ==============================
+// ========================================
+// HTTP
+// ========================================
 
-const httpServer = http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   res.writeHead(200, {
     "Content-Type": "text/plain; charset=utf-8"
   });
@@ -26,153 +20,185 @@ const httpServer = http.createServer((req, res) => {
   res.end("SHUTTER & CAGE SERVER ONLINE");
 });
 
-// ==============================
-// WebSocketサーバー
-// ==============================
+// ========================================
+// WebSocket
+// ========================================
 
 const wss = new WebSocket.Server({
-  server: httpServer
+  server
 });
 
-// ==============================
-// ルームコード生成
-// ==============================
+// ========================================
+// ルームコード
+// ========================================
 
-function generateRoomCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function makeRoomCode() {
+  const chars =
+    "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
   let code;
 
   do {
     code = "";
 
-    for (let i = 0; i < 5; i++) {
-      code += chars[Math.floor(Math.random() * chars.length)];
+    for (let i = 0; i < 6; i++) {
+      code += chars[
+        Math.floor(Math.random() * chars.length)
+      ];
     }
+
   } while (rooms.has(code));
 
   return code;
 }
 
-// ==============================
-// プレイヤーID生成
-// ==============================
+// ========================================
+// プレイヤーID
+// ========================================
 
-function generatePlayerId() {
+function makePlayerId() {
   return (
     Date.now().toString(36) +
-    Math.random().toString(36).substring(2, 8)
+    Math.random()
+      .toString(36)
+      .substring(2, 9)
   );
 }
 
-// ==============================
-// ルーム内のプレイヤー一覧
-// ==============================
+// ========================================
+// 送信
+// ========================================
 
-function getPlayerList(room) {
+function send(ws, data) {
+
+  if (
+    ws &&
+    ws.readyState === WebSocket.OPEN
+  ) {
+    ws.send(
+      JSON.stringify(data)
+    );
+  }
+
+}
+
+// ========================================
+// ルーム全員に送信
+// ========================================
+
+function broadcast(room, data) {
+
+  for (const player of room.players) {
+    send(player.ws, data);
+  }
+
+}
+
+// ========================================
+// プレイヤー一覧
+// ========================================
+
+function playerList(room) {
+
   return room.players.map(player => ({
     id: player.id,
     name: player.name,
     role: player.role,
-    ready: player.ready
-  }));
-}
-
-// ==============================
-// 送信
-// ==============================
-
-function send(ws, data) {
-  if (!ws) return;
-
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(data));
-  }
-}
-
-// ==============================
-// ルーム全員に送信
-// ==============================
-
-function broadcast(room, data) {
-  for (const player of room.players) {
-    send(player.ws, data);
-  }
-}
-
-// ==============================
-// ロビー情報送信
-// ==============================
-
-function sendLobby(room) {
-  broadcast(room, {
-    type: "lobby",
-    roomCode: room.code,
-    players: getPlayerList(room),
-    hostId: room.hostId,
-    gameStarted: room.gameStarted
-  });
-}
-
-// ==============================
-// ゲーム状態送信
-// ==============================
-
-function sendGameState(room) {
-  const players = room.players.map(player => ({
-    id: player.id,
-    name: player.name,
-    role: player.role,
+    alive: player.alive,
     floor: player.floor,
     x: player.x,
     y: player.y,
     z: player.z,
-    rotationY: player.rotationY,
-    alive: player.alive
+    yaw: player.yaw,
+    pitch: player.pitch,
+    ready: player.ready
   }));
 
-  broadcast(room, {
-    type: "game_state",
-    players: players,
-    trapParts: room.trapParts,
-    trapPlaced: room.trapPlaced,
-    trapPosition: room.trapPosition,
-    gameTime: room.gameTime,
-    gameEnded: room.gameEnded,
-    winner: room.winner
-  });
 }
 
-// ==============================
+// ========================================
+// ロビー状態
+// ========================================
+
+function sendRoomState(room) {
+
+  broadcast(room, {
+    type: "roomState",
+
+    roomCode: room.code,
+
+    hostId: room.hostId,
+
+    players: playerList(room),
+
+    items: room.items,
+
+    trap: room.trap,
+
+    gameStarted: room.gameStarted
+  });
+
+}
+
+// ========================================
+// プレイヤー検索
+// ========================================
+
+function findPlayer(room, id) {
+
+  return room.players.find(
+    p => p.id === id
+  );
+
+}
+
+// ========================================
 // ルーム作成
-// ==============================
+// ========================================
 
 function createRoom(ws, name) {
-  const code = generateRoomCode();
-  const id = generatePlayerId();
+
+  const roomCode =
+    makeRoomCode();
+
+  const playerId =
+    makePlayerId();
 
   const player = {
-    id: id,
+
+    id: playerId,
+
     ws: ws,
-    name: name || "Player",
+
+    name:
+      String(name || "Player")
+        .substring(0, 16),
+
     role: "human",
+
     ready: false,
 
-    floor: 1,
+    alive: true,
 
-    x: 0,
+    floor: 0,
+
+    x: -10,
+
     y: 1.7,
+
     z: 0,
 
-    rotationY: 0,
+    yaw: -Math.PI / 2,
 
-    alive: true
+    pitch: 0
+
   };
 
   const room = {
-    code: code,
 
-    hostId: id,
+    code: roomCode,
+
+    hostId: playerId,
 
     players: [player],
 
@@ -182,126 +208,171 @@ function createRoom(ws, name) {
 
     winner: null,
 
-    gameTime: 0,
+    startTime: 0,
 
-    startTime: null,
+    items:
+      Array(10).fill(false),
 
-    trapParts: {},
+    trap: null
 
-    trapPlaced: false,
-
-    trapPosition: null
   };
 
-  rooms.set(code, room);
+  rooms.set(
+    roomCode,
+    room
+  );
 
-  ws.playerId = id;
-  ws.roomCode = code;
+  ws.roomCode =
+    roomCode;
 
+  ws.playerId =
+    playerId;
+
+  // 自分に通知
   send(ws, {
-    type: "room_created",
-    roomCode: code,
-    playerId: id,
-    role: "human"
+
+    type: "roomCreated",
+
+    roomCode: roomCode,
+
+    playerId: playerId
+
   });
 
-  sendLobby(room);
+  sendRoomState(room);
 
   console.log(
-    `[CREATE] room=${code} player=${player.name}`
+    `[ROOM CREATE] ${roomCode}`
   );
+
 }
 
-// ==============================
+// ========================================
 // ルーム参加
-// ==============================
+// ========================================
 
-function joinRoom(ws, code, name) {
-  code = String(code || "").toUpperCase().trim();
+function joinRoom(
+  ws,
+  roomCode,
+  name
+) {
 
-  const room = rooms.get(code);
+  const code =
+    String(roomCode || "")
+      .trim()
+      .toUpperCase();
+
+  const room =
+    rooms.get(code);
 
   if (!room) {
+
     send(ws, {
       type: "error",
-      message: "ルームが見つかりません。"
+      message:
+        "ルームが見つかりません。"
     });
 
     return;
+
   }
 
   if (room.gameStarted) {
+
     send(ws, {
       type: "error",
-      message: "このゲームはすでに開始されています。"
+      message:
+        "すでにゲームが開始されています。"
     });
 
     return;
+
   }
 
-  if (room.players.length >= MAX_PLAYERS) {
+  if (
+    room.players.length >=
+    MAX_PLAYERS
+  ) {
+
     send(ws, {
       type: "error",
-      message: "このルームは満員です。"
+      message:
+        "このルームは満員です。"
     });
 
     return;
+
   }
 
-  const id = generatePlayerId();
+  const playerId =
+    makePlayerId();
 
   const player = {
-    id: id,
+
+    id: playerId,
+
     ws: ws,
-    name: name || `Player${room.players.length + 1}`,
+
+    name:
+      String(
+        name ||
+        `Player${room.players.length + 1}`
+      ).substring(0, 16),
+
     role: "human",
+
     ready: false,
 
-    floor: 1,
+    alive: true,
 
-    x: 0,
+    floor: 0,
+
+    x: -10,
+
     y: 1.7,
+
     z: 0,
 
-    rotationY: 0,
+    yaw: -Math.PI / 2,
 
-    alive: true
+    pitch: 0
+
   };
 
-  room.players.push(player);
+  room.players.push(
+    player
+  );
 
-  ws.playerId = id;
-  ws.roomCode = code;
+  ws.roomCode =
+    room.code;
+
+  ws.playerId =
+    playerId;
 
   send(ws, {
-    type: "room_joined",
-    roomCode: code,
-    playerId: id,
-    role: "human"
+
+    type: "roomJoined",
+
+    roomCode: room.code,
+
+    playerId: playerId
+
   });
 
-  sendLobby(room);
+  sendRoomState(room);
 
   console.log(
-    `[JOIN] room=${code} player=${player.name}`
+    `[ROOM JOIN] ${room.code} ${player.name}`
   );
+
 }
 
-// ==============================
-// プレイヤー取得
-// ==============================
-
-function getPlayer(room, playerId) {
-  return room.players.find(
-    player => player.id === playerId
-  );
-}
-
-// ==============================
+// ========================================
 // ゲーム開始
-// ==============================
+// ========================================
 
 function startGame(room) {
+
   if (!room) return;
 
   if (room.gameStarted) {
@@ -309,252 +380,318 @@ function startGame(room) {
   }
 
   if (room.players.length < 2) {
+
     broadcast(room, {
       type: "error",
-      message: "ゲーム開始には2人以上必要です。"
+      message:
+        "2人以上でゲームを開始できます。"
     });
 
     return;
+
   }
 
-  // 全員を一度人間に戻す
-  for (const player of room.players) {
+  // 全員を人間に戻す
+  for (
+    const player of room.players
+  ) {
+
     player.role = "human";
+
     player.alive = true;
+
+    player.ready = false;
+
   }
 
-  // ランダムに1人を鬼にする
-  const killerIndex = Math.floor(
-    Math.random() * room.players.length
-  );
+  // ランダムで鬼を1人
+  const killerIndex =
+    Math.floor(
+      Math.random() *
+      room.players.length
+    );
 
-  room.players[killerIndex].role = "killer";
+  room.players[
+    killerIndex
+  ].role = "killer";
 
   room.gameStarted = true;
-  room.gameEnded = false;
-  room.winner = null;
-  room.startTime = Date.now();
-  room.gameTime = 0;
 
-  room.trapParts = {};
-  room.trapPlaced = false;
-  room.trapPosition = null;
+  room.gameEnded = false;
+
+  room.winner = null;
+
+  room.startTime =
+    Date.now();
+
+  room.items =
+    Array(10).fill(false);
+
+  room.trap = null;
 
   // 初期位置
-  for (const player of room.players) {
-    player.floor = 1;
-    player.x = 0;
+  for (
+    const player of room.players
+  ) {
+
+    player.floor = 0;
+
+    player.x =
+      player.role === "killer"
+        ? 15
+        : -10;
+
     player.y = 1.7;
-    player.z = 0;
-    player.rotationY = 0;
+
+    player.z =
+      player.role === "killer"
+        ? -15
+        : 0;
+
+    player.yaw =
+      -Math.PI / 2;
+
+    player.pitch = 0;
+
   }
 
-  broadcast(room, {
-    type: "game_started",
-    roomCode: room.code,
-    players: getPlayerList(room)
-  });
+  // プレイヤーごとに
+  // 自分の役割を送る
+  for (
+    const player of room.players
+  ) {
 
-  sendGameState(room);
+    send(player.ws, {
+
+      type: "gameStarted",
+
+      playerId: player.id,
+
+      role: player.role,
+
+      players:
+        playerList(room)
+
+    });
+
+  }
+
+  sendPlayersState(room);
 
   console.log(
-    `[START] room=${room.code} killer=${room.players[killerIndex].name}`
+    `[GAME START] ${room.code}`
   );
+
 }
 
-// ==============================
-// プレイヤー移動情報
-// ==============================
+// ========================================
+// プレイヤー状態
+// ========================================
 
-function updatePlayer(room, player, data) {
-  if (!room || !player) return;
-
-  if (!room.gameStarted) {
-    return;
-  }
-
-  if (room.gameEnded) {
-    return;
-  }
-
-  if (!player.alive) {
-    return;
-  }
-
-  if (typeof data.floor === "number") {
-    player.floor = data.floor;
-  }
-
-  if (typeof data.x === "number") {
-    player.x = data.x;
-  }
-
-  if (typeof data.y === "number") {
-    player.y = data.y;
-  }
-
-  if (typeof data.z === "number") {
-    player.z = data.z;
-  }
-
-  if (typeof data.rotationY === "number") {
-    player.rotationY = data.rotationY;
-  }
-}
-
-// ==============================
-// 罠設置
-// ==============================
-
-function placeTrap(room, player, data) {
-  if (!room || !player) return;
-
-  if (player.role !== "human") {
-    return;
-  }
-
-  if (!player.alive) {
-    return;
-  }
-
-  if (room.trapPlaced) {
-    return;
-  }
-
-  room.trapPlaced = true;
-
-  room.trapPosition = {
-    floor: player.floor,
-    x: player.x,
-    y: player.y,
-    z: player.z
-  };
+function sendPlayersState(room) {
 
   broadcast(room, {
-    type: "trap_placed",
-    playerId: player.id,
-    position: room.trapPosition
+
+    type: "playersState",
+
+    players:
+      playerList(room)
+
   });
 
-  console.log(
-    `[TRAP] room=${room.code} player=${player.name}`
+}
+
+// ========================================
+// 距離
+// ========================================
+
+function distance(a, b) {
+
+  const dx =
+    a.x - b.x;
+
+  const dz =
+    a.z - b.z;
+
+  return Math.sqrt(
+    dx * dx +
+    dz * dz
   );
+
 }
 
-// ==============================
-// プレイヤー死亡
-// ==============================
-
-function killPlayer(room, player) {
-  if (!player || !player.alive) {
-    return;
-  }
-
-  player.alive = false;
-
-  broadcast(room, {
-    type: "player_killed",
-    playerId: player.id
-  });
-
-  checkWinCondition(room);
-}
-
-// ==============================
+// ========================================
 // 勝敗判定
-// ==============================
+// ========================================
 
-function checkWinCondition(room) {
-  if (!room || !room.gameStarted) {
+function checkWin(room) {
+
+  if (
+    !room.gameStarted ||
+    room.gameEnded
+  ) {
     return;
   }
 
-  const humans = room.players.filter(
-    player => player.role === "human"
-  );
+  // 罠がある場合
+  // 鬼が罠に近づいたら人間勝利
+  if (room.trap) {
 
-  const aliveHumans = humans.filter(
-    player => player.alive
-  );
+    const killer =
+      room.players.find(
+        p => p.role === "killer"
+      );
 
-  if (aliveHumans.length === 0) {
-    endGame(room, "killer");
-    return;
+    if (
+      killer &&
+      killer.alive &&
+      killer.floor === room.trap.floor &&
+      distance(
+        killer,
+        room.trap
+      ) < 1.8
+    ) {
+
+      endGame(
+        room,
+        "humans"
+      );
+
+      return;
+
+    }
+
   }
 
-  if (room.trapPlaced) {
-    // 罠による勝利判定はクライアント側から通知可能
+  // 生きている人間
+  const humans =
+    room.players.filter(
+      p =>
+        p.role === "human" &&
+        p.alive
+    );
+
+  if (humans.length === 0) {
+
+    endGame(
+      room,
+      "killer"
+    );
+
   }
+
 }
 
-// ==============================
+// ========================================
 // ゲーム終了
-// ==============================
+// ========================================
 
-function endGame(room, winner) {
-  if (!room || room.gameEnded) {
+function endGame(
+  room,
+  winner
+) {
+
+  if (
+    room.gameEnded
+  ) {
     return;
   }
 
   room.gameEnded = true;
-  room.winner = winner;
+
+  room.winner =
+    winner;
+
+  let elapsed = 0;
 
   if (room.startTime) {
-    room.gameTime =
-      Math.floor((Date.now() - room.startTime) / 1000);
+
+    elapsed =
+      Math.floor(
+        (Date.now() -
+          room.startTime) /
+        1000
+      );
+
   }
 
   broadcast(room, {
-    type: "game_over",
+
+    type: "gameOver",
+
     winner: winner,
-    gameTime: room.gameTime
+
+    elapsedTime: elapsed
+
   });
 
   console.log(
-    `[END] room=${room.code} winner=${winner}`
+    `[GAME END] ${room.code} winner=${winner}`
   );
-}// ==============================
+
+}// ========================================
 // WebSocket接続
-// ==============================
+// ========================================
 
 wss.on("connection", ws => {
-  console.log("[CONNECT] new client");
 
-  ws.playerId = null;
+  console.log(
+    "[CONNECT] client connected"
+  );
+
   ws.roomCode = null;
+  ws.playerId = null;
 
-  // ============================
+  // ======================================
   // メッセージ受信
-  // ============================
+  // ======================================
 
   ws.on("message", raw => {
+
     let data;
 
     try {
-      data = JSON.parse(raw.toString());
+
+      data =
+        JSON.parse(
+          raw.toString()
+        );
+
     } catch (error) {
+
       send(ws, {
         type: "error",
-        message: "不正なデータです。"
+        message:
+          "通信データを読み取れませんでした。"
       });
 
       return;
     }
 
-    // ----------------------------
-    // ルーム作成
-    // ----------------------------
+    // ====================================
+    // 部屋を作る
+    // ====================================
 
-    if (data.type === "create_room") {
-      createRoom(ws, data.name);
+    if (
+      data.type === "createRoom"
+    ) {
+
+      createRoom(
+        ws,
+        data.name
+      );
+
       return;
     }
 
-    // ----------------------------
-    // ルーム参加
-    // ----------------------------
+    // ====================================
+    // 部屋に参加
+    // ====================================
 
-    if (data.type === "join_room") {
+    if (
+      data.type === "joinRoom"
+    ) {
+
       joinRoom(
         ws,
         data.roomCode,
@@ -564,134 +701,390 @@ wss.on("connection", ws => {
       return;
     }
 
-    // ----------------------------
-    // 自分のルーム
-    // ----------------------------
+    // ====================================
+    // ルーム確認
+    // ====================================
 
-    const room = rooms.get(ws.roomCode);
+    const room =
+      rooms.get(
+        ws.roomCode
+      );
 
     if (!room) {
+
       send(ws, {
         type: "error",
-        message: "ルームに参加していません。"
+        message:
+          "ルームに参加していません。"
       });
 
       return;
     }
 
-    const player = getPlayer(
-      room,
-      ws.playerId
-    );
+    const player =
+      findPlayer(
+        room,
+        ws.playerId
+      );
 
     if (!player) {
+
       send(ws, {
         type: "error",
-        message: "プレイヤー情報が見つかりません。"
+        message:
+          "プレイヤー情報がありません。"
       });
 
       return;
     }
 
-    // ----------------------------
-    // ゲーム開始
-    // ----------------------------
+    // ====================================
+    // 準備OK
+    // ====================================
 
-    if (data.type === "start_game") {
-      if (room.hostId !== player.id) {
+    if (
+      data.type === "ready"
+    ) {
+
+      player.ready =
+        !!data.ready;
+
+      sendRoomState(room);
+
+      return;
+    }
+
+    // ====================================
+    // ゲーム開始
+    // ====================================
+
+    if (
+      data.type === "startGame"
+    ) {
+
+      if (
+        room.hostId !==
+        player.id
+      ) {
+
         send(ws, {
           type: "error",
-          message: "ホストだけがゲームを開始できます。"
+          message:
+            "ホストだけがゲームを開始できます。"
         });
 
         return;
       }
 
       startGame(room);
-      return;
-    }
-
-    // ----------------------------
-    // プレイヤー準備
-    // ----------------------------
-
-    if (data.type === "ready") {
-      player.ready = !!data.ready;
-
-      sendLobby(room);
-      return;
-    }
-
-    // ----------------------------
-    // プレイヤー移動
-    // ----------------------------
-
-    if (data.type === "player_update") {
-      updatePlayer(
-        room,
-        player,
-        data
-      );
 
       return;
     }
 
-    // ----------------------------
-    // 罠設置
-    // ----------------------------
+    // ====================================
+    // プレイヤー状態
+    // ====================================
 
-    if (data.type === "place_trap") {
-      placeTrap(
-        room,
-        player,
-        data
-      );
+    if (
+      data.type === "state"
+    ) {
 
-      return;
-    }
-
-    // ----------------------------
-    // 人間プレイヤーを捕まえる
-    // ----------------------------
-
-    if (data.type === "kill_player") {
-      if (player.role !== "killer") {
+      if (
+        !room.gameStarted ||
+        room.gameEnded
+      ) {
         return;
       }
 
-      const target = getPlayer(
-        room,
-        data.targetId
-      );
+      if (
+        typeof data.x === "number"
+      ) {
+        player.x =
+          data.x;
+      }
+
+      if (
+        typeof data.y === "number"
+      ) {
+        player.y =
+          data.y;
+      }
+
+      if (
+        typeof data.z === "number"
+      ) {
+        player.z =
+          data.z;
+      }
+
+      if (
+        typeof data.yaw === "number"
+      ) {
+        player.yaw =
+          data.yaw;
+      }
+
+      if (
+        typeof data.pitch === "number"
+      ) {
+        player.pitch =
+          data.pitch;
+      }
+
+      if (
+        typeof data.floor === "number"
+      ) {
+        player.floor =
+          Math.max(
+            0,
+            Math.min(
+              4,
+              Math.floor(data.floor)
+            )
+          );
+      }
+
+      checkWin(room);
+
+      return;
+    }
+
+    // ====================================
+    // 罠設置
+    // ====================================
+
+    if (
+      data.type === "placeTrap"
+    ) {
+
+      if (
+        !room.gameStarted ||
+        room.gameEnded
+      ) {
+        return;
+      }
+
+      if (
+        player.role !== "human"
+      ) {
+        return;
+      }
+
+      if (room.trap) {
+        return;
+      }
+
+      room.trap = {
+
+        floor:
+          player.floor,
+
+        x:
+          player.x,
+
+        y:
+          player.y,
+
+        z:
+          player.z
+
+      };
+
+      broadcast(room, {
+
+        type: "trapPlaced",
+
+        trap: room.trap
+
+      });
+
+      checkWin(room);
+
+      return;
+    }
+
+    // ====================================
+    // アイテム取得
+    // ====================================
+
+    if (
+      data.type === "collectItem"
+    ) {
+
+      if (
+        !room.gameStarted ||
+        room.gameEnded
+      ) {
+        return;
+      }
+
+      if (
+        player.role !== "human"
+      ) {
+        return;
+      }
+
+      const index =
+        Number(data.index);
+
+      if (
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= 10
+      ) {
+        return;
+      }
+
+      // すでに取得済み
+      if (
+        room.items[index]
+      ) {
+        return;
+      }
+
+      room.items[index] =
+        true;
+
+      broadcast(room, {
+
+        type: "itemCollected",
+
+        index: index,
+
+        items:
+          room.items
+
+      });
+
+      return;
+    }
+
+    // ====================================
+    // 鬼が人間を捕まえる
+    // ====================================
+
+    if (
+      data.type === "killPlayer"
+    ) {
+
+      if (
+        !room.gameStarted ||
+        room.gameEnded
+      ) {
+        return;
+      }
+
+      // 鬼以外は実行不可
+      if (
+        player.role !== "killer"
+      ) {
+        return;
+      }
+
+      const target =
+        findPlayer(
+          room,
+          data.targetId
+        );
 
       if (!target) {
         return;
       }
 
-      if (target.role !== "human") {
+      if (
+        target.role !== "human" ||
+        !target.alive
+      ) {
         return;
       }
 
-      killPlayer(
-        room,
-        target
-      );
+      // 同じ階のみ
+      if (
+        target.floor !==
+        player.floor
+      ) {
+        return;
+      }
 
-      sendGameState(room);
+      // 距離チェック
+      if (
+        distance(
+          player,
+          target
+        ) > 2.2
+      ) {
+        return;
+      }
+
+      target.alive =
+        false;
+
+      broadcast(room, {
+
+        type: "playerCaught",
+
+        playerId:
+          target.id
+
+      });
+
+      checkWin(room);
+
+      sendPlayersState(room);
 
       return;
     }
 
-    // ----------------------------
+    // ====================================
     // 鬼が罠にかかった
-    // ----------------------------
+    // ====================================
 
-    if (data.type === "killer_trapped") {
-      if (player.role !== "human") {
+    if (
+      data.type === "killerTrapped"
+    ) {
+
+      if (
+        !room.gameStarted ||
+        room.gameEnded
+      ) {
         return;
       }
 
-      if (!room.trapPlaced) {
+      if (
+        player.role !== "human"
+      ) {
+        return;
+      }
+
+      const killer =
+        room.players.find(
+          p =>
+            p.role === "killer"
+        );
+
+      if (!killer) {
+        return;
+      }
+
+      if (
+        !room.trap
+      ) {
+        return;
+      }
+
+      if (
+        killer.floor !==
+        room.trap.floor
+      ) {
+        return;
+      }
+
+      if (
+        distance(
+          killer,
+          room.trap
+        ) > 2.5
+      ) {
         return;
       }
 
@@ -703,59 +1096,145 @@ wss.on("connection", ws => {
       return;
     }
 
-    // ----------------------------
-    // ゲーム状態要求
-    // ----------------------------
+    // ====================================
+    // 鬼スタン
+    // ====================================
 
-    if (data.type === "request_state") {
-      sendLobby(room);
+    if (
+      data.type === "killerStunned"
+    ) {
 
-      if (room.gameStarted) {
-        sendGameState(room);
+      if (
+        player.role !== "human"
+      ) {
+        return;
+      }
+
+      broadcast(room, {
+
+        type: "killerStunned",
+
+        until:
+          Date.now() +
+          3000
+
+      });
+
+      return;
+    }
+
+    // ====================================
+    // ドア状態
+    // ====================================
+
+    if (
+      data.type === "door"
+    ) {
+
+      if (
+        !room.gameStarted
+      ) {
+        return;
+      }
+
+      const index =
+        Number(data.index);
+
+      if (
+        !Number.isInteger(index)
+      ) {
+        return;
+      }
+
+      broadcast(room, {
+
+        type: "door",
+
+        index: index,
+
+        open:
+          !!data.open
+
+      });
+
+      return;
+    }
+
+    // ====================================
+    // 現在状態を要求
+    // ====================================
+
+    if (
+      data.type === "requestState"
+    ) {
+
+      sendRoomState(room);
+
+      if (
+        room.gameStarted
+      ) {
+
+        sendPlayersState(
+          room
+        );
+
       }
 
       return;
     }
+
   });
 
-  // ============================
+  // ======================================
   // 切断
-  // ============================
+  // ======================================
 
   ws.on("close", () => {
+
     console.log(
-      `[DISCONNECT] ${ws.playerId || "unknown"}`
+      "[DISCONNECT]",
+      ws.playerId
     );
 
-    const room = rooms.get(ws.roomCode);
+    const room =
+      rooms.get(
+        ws.roomCode
+      );
 
     if (!room) {
       return;
     }
 
-    const playerIndex =
+    const index =
       room.players.findIndex(
-        player => player.id === ws.playerId
+        p =>
+          p.id ===
+          ws.playerId
       );
 
-    if (playerIndex === -1) {
+    if (index === -1) {
       return;
     }
 
-    const disconnected =
-      room.players[playerIndex];
+    const leaving =
+      room.players[index];
 
     room.players.splice(
-      playerIndex,
+      index,
       1
     );
 
-    // --------------------------
-    // 誰もいなくなったら
-    // --------------------------
+    // ====================================
+    // 部屋が空になった
+    // ====================================
 
-    if (room.players.length === 0) {
-      rooms.delete(room.code);
+    if (
+      room.players.length === 0
+    ) {
+
+      rooms.delete(
+        room.code
+      );
 
       console.log(
         `[ROOM DELETE] ${room.code}`
@@ -764,111 +1243,136 @@ wss.on("connection", ws => {
       return;
     }
 
-    // --------------------------
-    // ホストが抜けたら
-    // 次のプレイヤーをホストにする
-    // --------------------------
+    // ====================================
+    // ホスト変更
+    // ====================================
 
-    if (room.hostId === disconnected.id) {
+    if (
+      room.hostId ===
+      leaving.id
+    ) {
+
       room.hostId =
         room.players[0].id;
+
     }
 
-    // --------------------------
-    // ゲーム中に鬼が抜けた場合
-    // --------------------------
+    // ====================================
+    // 鬼が抜けた
+    // ====================================
 
     if (
       room.gameStarted &&
-      disconnected.role === "killer" &&
+      leaving.role === "killer" &&
       !room.gameEnded
     ) {
+
       endGame(
         room,
         "humans"
       );
+
     }
 
-    // --------------------------
-    // ゲーム中に人間が抜けた場合
-    // --------------------------
+    // ====================================
+    // 人間が抜けた
+    // ====================================
 
     if (
       room.gameStarted &&
-      disconnected.role === "human"
+      leaving.role === "human"
     ) {
-      checkWinCondition(room);
+
+      checkWin(room);
+
     }
 
-    sendLobby(room);
+    sendRoomState(
+      room
+    );
 
-    if (room.gameStarted) {
-      sendGameState(room);
+    if (
+      room.gameStarted
+    ) {
+
+      sendPlayersState(
+        room
+      );
+
     }
+
   });
 
-  // ============================
-  // エラー
-  // ============================
+  // ======================================
+  // WebSocketエラー
+  // ======================================
 
   ws.on("error", error => {
+
     console.error(
-      "[WEBSOCKET ERROR]",
+      "[WS ERROR]",
       error
     );
+
   });
+
 });
 
-// ==============================
-// ゲーム時間更新
-// ==============================
+// ========================================
+// 定期的にプレイヤー状態を配信
+// ========================================
 
 setInterval(() => {
-  for (const room of rooms.values()) {
+
+  for (
+    const room of rooms.values()
+  ) {
+
     if (
       !room.gameStarted ||
-      room.gameEnded ||
-      !room.startTime
+      room.gameEnded
     ) {
       continue;
     }
 
-    room.gameTime =
-      Math.floor(
-        (Date.now() - room.startTime) / 1000
-      );
+    sendPlayersState(
+      room
+    );
 
-    // 定期的に状態を送信
-    sendGameState(room);
+    checkWin(room);
+
   }
-}, 1000);
 
-// ==============================
+}, 100);
+
+// ========================================
 // サーバー起動
-// ==============================
+// ========================================
 
-httpServer.listen(
+server.listen(
   PORT,
   "0.0.0.0",
   () => {
-    console.log(
-      "================================"
-    );
-
-    console.log(
-      " SHUTTER & CAGE SERVER"
-    );
-
-    console.log(
-      " Multiplayer Server ONLINE"
-    );
-
-    console.log(
-      ` Port: ${PORT}`
-    );
 
     console.log(
       "================================"
     );
+
+    console.log(
+      " SHUTTER & CAGE"
+    );
+
+    console.log(
+      " MULTIPLAYER SERVER ONLINE"
+    );
+
+    console.log(
+      ` PORT: ${PORT}`
+    );
+
+    console.log(
+      "================================"
+    );
+
   }
 );
