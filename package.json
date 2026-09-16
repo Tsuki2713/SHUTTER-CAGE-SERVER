@@ -1,0 +1,16 @@
+{
+  "name": "shutter-cage-server",
+  "version": "1.0.0",
+  "description": "SHUTTER & CAGE multiplayer server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": "22.x"
+  }
+}
